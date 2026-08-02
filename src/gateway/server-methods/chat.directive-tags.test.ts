@@ -815,12 +815,15 @@ async function runNonStreamingChatSend(params: {
 
   await waitForAssertion(() => {
     expect(
-      (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
-    ).toBe(1);
+      (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.some(
+        ([event]) => event === "chat",
+      ),
+    ).toBe(true);
   });
 
-  const chatCall = mockCallAt(params.context.broadcast as unknown as ReturnType<typeof vi.fn>, 0);
-  expect(chatCall?.[0]).toBe("chat");
+  const chatCall = (
+    params.context.broadcast as unknown as ReturnType<typeof vi.fn>
+  ).mock.calls.find(([event]) => event === "chat");
   return chatCall?.[1] as Record<string, any> | undefined;
 }
 
@@ -3616,6 +3619,76 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
   });
 
+  it("chat.send emits one authoritative thinking lifecycle event before dispatch", async () => {
+    await createTranscriptFixture("openclaw-chat-send-lifecycle-");
+    mockState.sessionEntry = { canonicalKey: "agent:main:canon" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-lifecycle",
+      sessionKey: "legacy-key",
+    });
+
+    const broadcast = context.broadcast as unknown as ReturnType<typeof vi.fn>;
+    const lifecycleCalls = broadcast.mock.calls.filter(([event]) => event === "jarvis.lifecycle");
+    expect(lifecycleCalls).toHaveLength(1);
+    expect(lifecycleCalls[0]?.[1]).toEqual({
+      sessionKey: "agent:main:canon",
+      runId: "idem-lifecycle",
+      seq: 1,
+      state: "thinking",
+      messageKey: "lifecycle.thinking",
+      timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+    });
+    const addChatRun = context.addChatRun as unknown as ReturnType<typeof vi.fn>;
+    expect(addChatRun.mock.invocationCallOrder[0]).toBeLessThan(
+      broadcast.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(mockState.lastDispatchCtx?.MessageSid).toBe("idem-lifecycle");
+    expect(broadcast.mock.calls.findIndex(([event]) => event === "jarvis.lifecycle")).toBeLessThan(
+      broadcast.mock.calls.findIndex(([event]) => event === "chat"),
+    );
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:canon",
+      "jarvis.lifecycle",
+      lifecycleCalls[0]?.[1],
+    );
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-lifecycle",
+      sessionKey: "legacy-key",
+    });
+    expect(broadcast.mock.calls.filter(([event]) => event === "jarvis.lifecycle")).toHaveLength(1);
+  });
+
+  it("keeps chat authoritative when lifecycle publication fails", async () => {
+    await createTranscriptFixture("openclaw-chat-send-lifecycle-failure-");
+    mockState.finalText = "still completes";
+    const respond = vi.fn();
+    const context = createChatContext();
+    const broadcast = context.broadcast as unknown as ReturnType<typeof vi.fn>;
+    broadcast.mockImplementationOnce(() => {
+      throw new Error("lifecycle transport unavailable");
+    });
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-lifecycle-failure",
+    });
+
+    expect(payload?.state).toBe("final");
+    expect(extractFirstTextBlock(payload)).toBe("still completes");
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining("jarvis.lifecycle publication failed"),
+    );
+  });
+
   it("chat.send broadcasts final replies for telegram-shaped session keys", async () => {
     await createTranscriptFixture("openclaw-chat-send-telegram-final-");
     mockState.finalText = "telegram ok";
@@ -4921,11 +4994,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitForCompletion: false,
     });
 
-    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+    const broadcast = context.broadcast as unknown as ReturnType<typeof vi.fn>;
+    expect(broadcast.mock.calls.filter(([event]) => event === "chat")).toHaveLength(0);
     releaseSave();
 
     await waitForAssertion(() => {
-      expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+      expect(broadcast.mock.calls.filter(([event]) => event === "chat")).toHaveLength(1);
       if (findUserUpdate()?.message === undefined) {
         throw new Error("Expected streamed user transcript update message");
       }

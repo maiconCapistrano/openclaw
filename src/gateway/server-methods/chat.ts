@@ -2880,6 +2880,39 @@ function resolveGlobalAwareNodeChatDeliveryKeys(params: {
   return keys;
 }
 
+function emitJarvisThinkingLifecycle(params: {
+  context: Pick<
+    GatewayRequestContext,
+    "broadcast" | "getRuntimeConfig" | "logGateway" | "nodeSendToSession"
+  >;
+  sessionKey: string;
+  runId: string;
+  agentId?: string;
+}) {
+  const payload = {
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    // Lifecycle ordering is independent from chat and transport sequences.
+    seq: 1,
+    state: "thinking",
+    messageKey: "lifecycle.thinking",
+    timestamp: new Date().toISOString(),
+  } as const;
+  try {
+    params.context.broadcast("jarvis.lifecycle", payload, { dropIfSlow: true });
+    sendGlobalAwareNodeChatPayload({
+      context: params.context,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      event: "jarvis.lifecycle",
+      payload,
+    });
+  } catch (error) {
+    // Lifecycle metadata is advisory; publication must never block the chat run.
+    params.context.logGateway.warn(`jarvis.lifecycle publication failed: ${formatForLog(error)}`);
+  }
+}
+
 function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined) {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
 }
@@ -4380,6 +4413,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId: selectedAgent.agentId,
         clientRunId,
         ...(chatSendTiming ? { chatSendTiming } : {}),
+      });
+      emitJarvisThinkingLifecycle({
+        context,
+        sessionKey,
+        runId: clientRunId,
+        agentId: selectedAgent.agentId,
       });
       const ackPayload = {
         runId: clientRunId,
