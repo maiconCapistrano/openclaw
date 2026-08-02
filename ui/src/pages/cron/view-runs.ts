@@ -90,6 +90,16 @@ function renderFilterDropdown(params: {
   onToggle: (value: string, checked: boolean) => void;
   onClear: () => void;
 }) {
+  const selectedLabels = params.options
+    .filter((option) => params.selected.includes(option.value))
+    .map((option) => option.label);
+  const accessibleSummary =
+    selectedLabels.length > 0
+      ? new Intl.ListFormat(document.documentElement.lang, {
+          style: "long",
+          type: "conjunction",
+        }).format(selectedLabels)
+      : params.summary;
   return html`
     <div class="cron-filter-dropdown" data-filter=${params.id}>
       <wa-dropdown
@@ -115,7 +125,7 @@ function renderFilterDropdown(params: {
             ? "active"
             : ""}"
           title=${params.title}
-          aria-label=${params.title}
+          aria-label=${`${params.title} ${accessibleSummary}`}
         >
           <span>${params.summary}</span>
           ${icon("chevronDown")}

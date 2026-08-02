@@ -412,6 +412,66 @@ describe("cron view list pane", () => {
 });
 
 describe("cron view run history", () => {
+  it("includes active selections in run filter accessible names", () => {
+    const allRuns = renderView({ listTab: "activity" });
+    expect(
+      getElement(
+        allRuns,
+        '[data-filter="status"] .cron-filter-dropdown__trigger',
+        HTMLButtonElement,
+      ).getAttribute("aria-label"),
+    ).toBe("Status All statuses");
+    expect(
+      getElement(
+        allRuns,
+        '[data-filter="delivery"] .cron-filter-dropdown__trigger',
+        HTMLButtonElement,
+      ).getAttribute("aria-label"),
+    ).toBe("Delivery All delivery");
+
+    const filteredRuns = renderView({
+      listTab: "activity",
+      runsStatuses: ["error", "ok", "skipped"],
+      runsDeliveryStatuses: ["delivered", "not-delivered", "unknown"],
+    });
+    const statusTrigger = getElement(
+      filteredRuns,
+      '[data-filter="status"] .cron-filter-dropdown__trigger',
+      HTMLButtonElement,
+    );
+    const deliveryTrigger = getElement(
+      filteredRuns,
+      '[data-filter="delivery"] .cron-filter-dropdown__trigger',
+      HTMLButtonElement,
+    );
+    expect(statusTrigger.getAttribute("aria-label")).toBe("Status OK, Error, and Skipped");
+    expect(deliveryTrigger.getAttribute("aria-label")).toBe(
+      "Delivery Delivered, Not delivered, and Unknown",
+    );
+    expect(statusTrigger.textContent).toContain("OK +2");
+    expect(deliveryTrigger.textContent).toContain("Delivered +2");
+  });
+
+  it("formats run filter selections using the active document locale", () => {
+    const previousLocale = document.documentElement.lang;
+    try {
+      document.documentElement.lang = "de";
+      const container = renderView({
+        listTab: "activity",
+        runsStatuses: ["ok", "error", "skipped"],
+      });
+      expect(
+        getElement(
+          container,
+          '[data-filter="status"] .cron-filter-dropdown__trigger',
+          HTMLButtonElement,
+        ).getAttribute("aria-label"),
+      ).toBe("Status OK, Error und Skipped");
+    } finally {
+      document.documentElement.lang = previousLocale;
+    }
+  });
+
   it("renders runs sorted newest first and wires run filters", () => {
     const onRunsFiltersChange = vi.fn();
     const container = renderView({

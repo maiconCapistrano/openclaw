@@ -345,6 +345,130 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("announces selected history filters and sends their Gateway request values", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([
+          {
+            ts: 1,
+            jobId: "filtered-job",
+            status: "error",
+            deliveryStatus: "delivered",
+            summary: "Delivered failure",
+          },
+        ]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+
+      const statusFilter = page.locator('[data-filter="status"]');
+      const deliveryFilter = page.locator('[data-filter="delivery"]');
+      const statusTrigger = statusFilter.locator(".cron-filter-dropdown__trigger");
+      const deliveryTrigger = deliveryFilter.locator(".cron-filter-dropdown__trigger");
+      await page.getByRole("button", { name: "Status All statuses", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Delivery All delivery", exact: true }).waitFor();
+
+      const initialRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await statusTrigger.click();
+      await statusFilter.locator('wa-dropdown-item[value="option:error"]').click();
+      await page.getByRole("button", { name: "Status Error", exact: true }).waitFor();
+      await statusFilter.locator('wa-dropdown-item[value="option:ok"]').click();
+      await statusFilter.locator('wa-dropdown-item[value="option:skipped"]').click();
+      await page
+        .getByRole("button", { name: "Status OK, Error, and Skipped", exact: true })
+        .waitFor();
+      expect(await statusTrigger.textContent()).toContain("OK +2");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs")).slice(initialRequestCount).some((request) => {
+            const params = requestParams(request);
+            const statuses = params.statuses;
+            return (
+              Array.isArray(statuses) &&
+              ["ok", "error", "skipped"].every((status) => statuses.includes(status))
+            );
+          }),
+        )
+        .toBe(true);
+
+      const statusRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await deliveryTrigger.click();
+      await deliveryFilter.locator('wa-dropdown-item[value="option:delivered"]').click();
+      await page.getByRole("button", { name: "Delivery Delivered", exact: true }).waitFor();
+      await deliveryFilter.locator('wa-dropdown-item[value="option:not-delivered"]').click();
+      await deliveryFilter.locator('wa-dropdown-item[value="option:unknown"]').click();
+      await page
+        .getByRole("button", {
+          name: "Delivery Delivered, Not delivered, and Unknown",
+          exact: true,
+        })
+        .waitFor();
+      expect(await deliveryTrigger.textContent()).toContain("Delivered +2");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs")).slice(statusRequestCount).some((request) => {
+            const params = requestParams(request);
+            const statuses = params.statuses;
+            const deliveryStatuses = params.deliveryStatuses;
+            return (
+              Array.isArray(statuses) &&
+              ["ok", "error", "skipped"].every((status) => statuses.includes(status)) &&
+              Array.isArray(deliveryStatuses) &&
+              ["delivered", "not-delivered", "unknown"].every((status) =>
+                deliveryStatuses.includes(status),
+              )
+            );
+          }),
+        )
+        .toBe(true);
+
+      const deliveryRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await deliveryFilter.locator('wa-dropdown-item[value="command:clear"]').click();
+      await page.getByRole("button", { name: "Delivery All delivery", exact: true }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs")).slice(deliveryRequestCount).some((request) => {
+            const params = requestParams(request);
+            const statuses = params.statuses;
+            return (
+              Array.isArray(statuses) &&
+              ["ok", "error", "skipped"].every((status) => statuses.includes(status)) &&
+              !("deliveryStatuses" in params)
+            );
+          }),
+        )
+        .toBe(true);
+
+      const clearedDeliveryRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await statusTrigger.click();
+      await statusFilter.locator('wa-dropdown-item[value="command:clear"]').click();
+      await page.getByRole("button", { name: "Status All statuses", exact: true }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs"))
+            .slice(clearedDeliveryRequestCount)
+            .some((request) => {
+              const params = requestParams(request);
+              return !("statuses" in params) && !("deliveryStatuses" in params);
+            }),
+        )
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps the newest visible overview when an older history search resolves last", async () => {
     const context = await browser.newContext({
       locale: "en-US",
