@@ -40,6 +40,7 @@ export const GATEWAY_EVENTS = [
   "connect.challenge",
   "agent",
   "chat",
+  "jarvis.lifecycle",
   "session.message",
   "session.operation",
   "session.tool",

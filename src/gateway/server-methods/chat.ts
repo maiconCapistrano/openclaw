@@ -150,6 +150,10 @@ import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
+  createJarvisThinkingLifecyclePayload,
+  JARVIS_LIFECYCLE_EVENT,
+} from "../jarvis-lifecycle.js";
+import {
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
@@ -2537,6 +2541,38 @@ function broadcastChatFinal(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+export function broadcastJarvisThinkingLifecycle(params: {
+  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "logGateway"> &
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
+  runId: string;
+  sessionKey: string;
+  agentId?: string;
+}) {
+  const payload = createJarvisThinkingLifecyclePayload({
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+  });
+
+  // Lifecycle is additive diagnostics: publication failure must not block the
+  // authoritative chat run or alter its terminal behavior.
+  try {
+    params.context.broadcast(JARVIS_LIFECYCLE_EVENT, payload);
+  } catch (error) {
+    params.context.logGateway.warn(`Jarvis lifecycle broadcast failed: ${formatForLog(error)}`);
+  }
+  try {
+    sendGlobalAwareNodeChatPayload({
+      context: params.context,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      event: JARVIS_LIFECYCLE_EVENT,
+      payload,
+    });
+  } catch (error) {
+    params.context.logGateway.warn(`Jarvis lifecycle node delivery failed: ${formatForLog(error)}`);
+  }
+}
+
 function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
   btw: { question: string };
   text: string;
@@ -3842,6 +3878,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId: selectedAgent.agentId,
         clientRunId,
         ...(chatSendTiming ? { chatSendTiming } : {}),
+      });
+      broadcastJarvisThinkingLifecycle({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId: selectedAgent.agentId,
       });
       const ackPayload = {
         runId: clientRunId,

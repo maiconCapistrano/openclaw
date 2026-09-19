@@ -377,6 +377,12 @@ function broadcastChatClassEvents(
   broadcast: ReturnType<typeof createGatewayBroadcaster>["broadcast"],
 ) {
   broadcast("chat", chatPayload());
+  broadcast("jarvis.lifecycle", {
+    sessionKey: "agent:main:main",
+    runId: "run-1",
+    seq: 1,
+    state: "thinking",
+  });
   broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
   broadcast("chat.send_timing", { phase: "dispatch-started", runId: "run-1" });
   broadcast("chat.side_result", chatSideResultPayload());
@@ -430,10 +436,16 @@ describe("gateway broadcaster", () => {
 
     expect(pairingSocket.send).not.toHaveBeenCalled();
     expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).toHaveBeenCalledTimes(4);
-    expect(writeSocket.send).toHaveBeenCalledTimes(4);
-    expect(adminSocket.send).toHaveBeenCalledTimes(4);
-    const expectedEvents = ["chat", "agent", "chat.send_timing", "chat.side_result"];
+    expect(readSocket.send).toHaveBeenCalledTimes(5);
+    expect(writeSocket.send).toHaveBeenCalledTimes(5);
+    expect(adminSocket.send).toHaveBeenCalledTimes(5);
+    const expectedEvents = [
+      "chat",
+      "jarvis.lifecycle",
+      "agent",
+      "chat.send_timing",
+      "chat.side_result",
+    ];
     expectSentEvents(readSocket, expectedEvents);
     expectSentEvents(writeSocket, expectedEvents);
     expectSentEvents(adminSocket, expectedEvents);

@@ -10,6 +10,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).not.toContain("talk.realtime.relay");
     expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
+
+  it("advertises the additive Jarvis lifecycle event", () => {
+    expect(GATEWAY_EVENTS).toContain("jarvis.lifecycle");
+  });
 });
 
 describe("listGatewayMethods", () => {

@@ -9,6 +9,7 @@ import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.j
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import type { broadcastJarvisThinkingLifecycle } from "./server-methods/chat.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -440,6 +441,113 @@ describe("gateway server chat", () => {
     });
     expect(sanitizedRes.ok).toBe(true);
   });
+
+  test("emits one authoritative thinking lifecycle event per accepted chat run", async () => {
+    const runId = "idem-jarvis-lifecycle-1";
+    const lifecycleFrames: Array<Record<string, unknown>> = [];
+    const collectLifecycle = (data: WebSocket.RawData) => {
+      const text = Array.isArray(data)
+        ? Buffer.concat(data).toString("utf8")
+        : data instanceof ArrayBuffer
+          ? Buffer.from(new Uint8Array(data)).toString("utf8")
+          : Buffer.from(data).toString("utf8");
+      const frame = JSON.parse(text) as Record<string, unknown>;
+      if (frame.type === "event" && frame.event === "jarvis.lifecycle") {
+        lifecycleFrames.push(frame);
+      }
+    };
+    ws.on("message", collectLifecycle);
+    try {
+      const first = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: runId,
+      });
+      expect(first.ok).toBe(true);
+      expect(first.payload?.runId).toBe(runId);
+
+      const duplicate = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: runId,
+      });
+      expect(duplicate.ok).toBe(true);
+      expect(duplicate.payload?.runId).toBe(runId);
+
+      expect(lifecycleFrames).toHaveLength(1);
+      expect(lifecycleFrames[0]).toMatchObject({
+        type: "event",
+        event: "jarvis.lifecycle",
+        payload: {
+          sessionKey: "agent:main:main",
+          runId,
+          seq: 1,
+          state: "thinking",
+          messageKey: "lifecycle.thinking",
+        },
+      });
+      const payload = lifecycleFrames[0]?.payload as { timestamp?: unknown };
+      expect(Object.keys(payload).toSorted()).toEqual([
+        "messageKey",
+        "runId",
+        "seq",
+        "sessionKey",
+        "state",
+        "timestamp",
+      ]);
+      expect(typeof payload.timestamp).toBe("string");
+      expect(Number.isNaN(Date.parse(payload.timestamp as string))).toBe(false);
+
+      const rejected = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "invalid\u0000message",
+        idempotencyKey: "idem-jarvis-lifecycle-rejected",
+      });
+      expect(rejected.ok).toBe(false);
+      expect(lifecycleFrames).toHaveLength(1);
+    } finally {
+      ws.off("message", collectLifecycle);
+    }
+  });
+
+  test.each(["broadcast", "nodeSendToSession"])(
+    "lifecycle %s failure is contained and preserves the other delivery path",
+    async (failingMethod) => {
+      const { broadcastJarvisThinkingLifecycle: deliverLifecycle } =
+        await import("./server-methods/chat.js");
+      const broadcast = vi.fn();
+      const nodeSendToSession = vi.fn();
+      const warn = vi.fn();
+      const failing = failingMethod === "broadcast" ? broadcast : nodeSendToSession;
+      failing.mockImplementation(() => {
+        throw new Error("controlled delivery failure");
+      });
+      const context = {
+        broadcast,
+        nodeSendToSession,
+        logGateway: { warn },
+      } as unknown as Parameters<typeof broadcastJarvisThinkingLifecycle>[0]["context"];
+
+      expect(() =>
+        deliverLifecycle({
+          context,
+          runId: "accepted-run",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        }),
+      ).not.toThrow();
+      expect(broadcast).toHaveBeenCalledWith(
+        "jarvis.lifecycle",
+        expect.objectContaining({ runId: "accepted-run", state: "thinking" }),
+      );
+      expect(nodeSendToSession).toHaveBeenCalledWith(
+        "agent:main:main",
+        "jarvis.lifecycle",
+        expect.objectContaining({ runId: "accepted-run", sessionKey: "agent:main:main" }),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("controlled delivery failure"));
+    },
+  );
 
   test("handles chat send and history flows", async () => {
     const tempDirs: string[] = [];
